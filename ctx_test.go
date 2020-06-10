@@ -1,938 +1,1017 @@
-// 🚀 Fiber is an Express inspired web framework written in Go with 💖
+// ⚡️ Fiber is an Express inspired web framework written in Go with ☕️
+// 🤖 Github Repository: https://github.com/gofiber/fiber
 // 📌 API Documentation: https://docs.gofiber.io
-// 📝 Github Repository: https://github.com/gofiber/fiber
 
 package fiber
 
+// go test -v -run=^$ -bench=Benchmark_Ctx_Accepts -benchmem -count=4
+// go test -run Test_Ctx
+
 import (
+	"bufio"
 	"bytes"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"mime/multipart"
-	"net/http"
 	"net/http/httptest"
-	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
+	"text/template"
 	"time"
+
+	utils "github.com/gofiber/utils"
+	fasthttp "github.com/valyala/fasthttp"
 )
 
-func Test_Accepts(t *testing.T) {
+// go test -run Test_Ctx_Accepts
+func Test_Ctx_Accepts(t *testing.T) {
+	t.Parallel()
 	app := New()
-	app.Get("/test", func(c *Ctx) {
-		expect := ""
-		result := c.Accepts(expect)
-		if c.Accepts() != "" {
-			t.Fatalf(`Expecting %s, got %s`, expect, result)
-		}
-		expect = ".xml"
-		result = c.Accepts(expect)
-		if result != expect {
-			t.Fatalf(`Expecting %s, got %s`, expect, result)
-		}
-		expect = ".whaaaaat"
-		result = c.Accepts(expect)
-		if result != "" {
-			t.Fatalf(`Expecting %s, got %s`, "", result)
-		}
-	})
-	req := httptest.NewRequest("GET", "/test", nil)
-	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9")
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf(`%s: %s`, t.Name(), err)
-	}
-	if resp.StatusCode != 200 {
-		t.Fatalf(`%s: StatusCode %v`, t.Name(), resp.StatusCode)
-	}
+	ctx := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(ctx)
+	ctx.Fasthttp.Request.Header.Set(HeaderAccept, "text/html,application/xhtml+xml,application/xml;q=0.9")
+	utils.AssertEqual(t, "", ctx.Accepts(""))
+	utils.AssertEqual(t, "", ctx.Accepts())
+	utils.AssertEqual(t, ".xml", ctx.Accepts(".xml"))
+	utils.AssertEqual(t, "", ctx.Accepts(".john"))
 }
-func Test_AcceptsCharsets(t *testing.T) {
-	app := New()
-	app.Get("/test", func(c *Ctx) {
-		c.AcceptsCharsets()
 
-		expect := "utf-8"
-		result := c.AcceptsCharsets(expect)
-		if result != expect {
-			t.Fatalf(`%s: Expecting %s, got %s`, t.Name(), expect, result)
-		}
-	})
-	req, _ := http.NewRequest("GET", "/test", nil)
-	req.Header.Set("Accept-Charset", "utf-8, iso-8859-1;q=0.5")
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf(`%s: %s`, t.Name(), err)
-	}
-	if resp.StatusCode != 200 {
-		t.Fatalf(`%s: StatusCode %v`, t.Name(), resp.StatusCode)
-	}
-}
-func Test_AcceptsEncodings(t *testing.T) {
+// go test -v -run=^$ -bench=Benchmark_Ctx_Accepts -benchmem -count=4
+func Benchmark_Ctx_Accepts(b *testing.B) {
 	app := New()
-	app.Get("/test", func(c *Ctx) {
-		c.AcceptsEncodings()
-		expect := "gzip"
-		result := c.AcceptsEncodings(expect)
-		if result != expect {
-			t.Fatalf(`%s: Expecting %s, got %s`, t.Name(), expect, result)
-		}
-	})
-	req, _ := http.NewRequest("GET", "/test", nil)
-	req.Header.Set("Accept-Encoding", "deflate, gzip;q=1.0, *;q=0.5")
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf(`%s: %s`, t.Name(), err)
+	c := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(c)
+	c.Fasthttp.Request.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9")
+	var res string
+	b.ReportAllocs()
+	b.ResetTimer()
+	for n := 0; n < b.N; n++ {
+		res = c.Accepts(".xml")
 	}
-	if resp.StatusCode != 200 {
-		t.Fatalf(`%s: StatusCode %v`, t.Name(), resp.StatusCode)
-	}
+	utils.AssertEqual(b, ".xml", res)
 }
-func Test_AcceptsLanguages(t *testing.T) {
+
+// go test -run Test_Ctx_Accepts_EmptyAccept
+func Test_Ctx_Accepts_EmptyAccept(t *testing.T) {
+	t.Parallel()
 	app := New()
-	app.Get("/test", func(c *Ctx) {
-		c.AcceptsLanguages()
-		expect := "fr"
-		result := c.AcceptsLanguages(expect)
-		if result != expect {
-			t.Fatalf(`%s: Expecting %s, got %s`, t.Name(), expect, result)
-		}
-	})
-	req, _ := http.NewRequest("GET", "/test", nil)
-	req.Header.Set("Accept-Language", "fr-CH, fr;q=0.9, en;q=0.8, de;q=0.7, *;q=0.5")
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf(`%s: %s`, t.Name(), err)
-	}
-	if resp.StatusCode != 200 {
-		t.Fatalf(`%s: StatusCode %v`, t.Name(), resp.StatusCode)
-	}
+	ctx := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(ctx)
+	utils.AssertEqual(t, ".forwarded", ctx.Accepts(".forwarded"))
 }
-func Test_BaseURL(t *testing.T) {
+
+// go test -run Test_Ctx_Accepts_Wildcard
+func Test_Ctx_Accepts_Wildcard(t *testing.T) {
+	t.Parallel()
 	app := New()
-	app.Get("/test", func(c *Ctx) {
-		expect := "http://google.com"
-		result := c.BaseURL()
-		if result != expect {
-			t.Fatalf(`%s: Expecting %s, got %s`, t.Name(), expect, result)
-		}
-	})
-	req, _ := http.NewRequest("GET", "http://google.com/test", nil)
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf(`%s: %s`, t.Name(), err)
-	}
-	if resp.StatusCode != 200 {
-		t.Fatalf(`%s: StatusCode %v`, t.Name(), resp.StatusCode)
-	}
+	ctx := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(ctx)
+	ctx.Fasthttp.Request.Header.Set(HeaderAccept, "*/*;q=0.9")
+	utils.AssertEqual(t, "html", ctx.Accepts("html"))
+	utils.AssertEqual(t, "foo", ctx.Accepts("foo"))
+	utils.AssertEqual(t, ".bar", ctx.Accepts(".bar"))
+	ctx.Fasthttp.Request.Header.Set(HeaderAccept, "text/html,application/*;q=0.9")
+	utils.AssertEqual(t, "xml", ctx.Accepts("xml"))
 }
-func Test_Body(t *testing.T) {
+
+// go test -run Test_Ctx_AcceptsCharsets
+func Test_Ctx_AcceptsCharsets(t *testing.T) {
+	t.Parallel()
 	app := New()
-	app.Post("/test", func(c *Ctx) {
-		expect := "john=doe"
-		result := c.Body()
-		if result != expect {
-			t.Fatalf(`%s: Expecting %s, got %s`, t.Name(), expect, result)
-		}
-		expect = "doe"
-		result = c.Body("john")
-		if result != expect {
-			t.Fatalf(`%s: Expecting %s, got %s`, t.Name(), expect, result)
-		}
-	})
-	data := url.Values{}
-	data.Set("john", "doe")
-	req, _ := http.NewRequest("POST", "/test", strings.NewReader(data.Encode()))
-	req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Add("Content-Length", strconv.Itoa(len(data.Encode())))
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf(`%s: %s`, t.Name(), err)
-	}
-	if resp.StatusCode != 200 {
-		t.Fatalf(`%s: StatusCode %v`, t.Name(), resp.StatusCode)
-	}
+	ctx := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(ctx)
+	ctx.Fasthttp.Request.Header.Set(HeaderAcceptCharset, "utf-8, iso-8859-1;q=0.5")
+	utils.AssertEqual(t, "utf-8", ctx.AcceptsCharsets("utf-8"))
 }
-func Test_BodyParser(t *testing.T) {
+
+// go test -v -run=^$ -bench=Benchmark_Ctx_AcceptsCharsets -benchmem -count=4
+func Benchmark_Ctx_AcceptsCharsets(b *testing.B) {
 	app := New()
+	c := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(c)
+	c.Fasthttp.Request.Header.Set("Accept-Charset", "utf-8, iso-8859-1;q=0.5")
+	var res string
+	b.ReportAllocs()
+	b.ResetTimer()
+	for n := 0; n < b.N; n++ {
+		res = c.AcceptsCharsets("utf-8")
+	}
+	utils.AssertEqual(b, "utf-8", res)
+}
+
+// go test -run Test_Ctx_AcceptsEncodings
+func Test_Ctx_AcceptsEncodings(t *testing.T) {
+	t.Parallel()
+	app := New()
+	ctx := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(ctx)
+	ctx.Fasthttp.Request.Header.Set(HeaderAcceptEncoding, "deflate, gzip;q=1.0, *;q=0.5")
+	utils.AssertEqual(t, "gzip", ctx.AcceptsEncodings("gzip"))
+	utils.AssertEqual(t, "abc", ctx.AcceptsEncodings("abc"))
+}
+
+// go test -v -run=^$ -bench=Benchmark_Ctx_AcceptsEncodings -benchmem -count=4
+func Benchmark_Ctx_AcceptsEncodings(b *testing.B) {
+	app := New()
+	c := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(c)
+	c.Fasthttp.Request.Header.Set(HeaderAcceptEncoding, "deflate, gzip;q=1.0, *;q=0.5")
+	var res string
+	b.ReportAllocs()
+	b.ResetTimer()
+	for n := 0; n < b.N; n++ {
+		res = c.AcceptsEncodings("gzip")
+	}
+	utils.AssertEqual(b, "gzip", res)
+}
+
+// go test -run Test_Ctx_AcceptsLanguages
+func Test_Ctx_AcceptsLanguages(t *testing.T) {
+	t.Parallel()
+	app := New()
+	ctx := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(ctx)
+	ctx.Fasthttp.Request.Header.Set(HeaderAcceptLanguage, "fr-CH, fr;q=0.9, en;q=0.8, de;q=0.7, *;q=0.5")
+	utils.AssertEqual(t, "fr", ctx.AcceptsLanguages("fr"))
+}
+
+// go test -v -run=^$ -bench=Benchmark_Ctx_AcceptsLanguages -benchmem -count=4
+func Benchmark_Ctx_AcceptsLanguages(b *testing.B) {
+	app := New()
+	c := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(c)
+	c.Fasthttp.Request.Header.Set(HeaderAcceptLanguage, "fr-CH, fr;q=0.9, en;q=0.8, de;q=0.7, *;q=0.5")
+	var res string
+	b.ReportAllocs()
+	b.ResetTimer()
+	for n := 0; n < b.N; n++ {
+		res = c.AcceptsLanguages("fr")
+	}
+	utils.AssertEqual(b, "fr", res)
+}
+
+// go test -run Test_Ctx_App
+func Test_Ctx_App(t *testing.T) {
+	t.Parallel()
+	app := New()
+	app.Settings.BodyLimit = 1000
+	ctx := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(ctx)
+	utils.AssertEqual(t, 1000, ctx.App().Settings.BodyLimit)
+}
+
+// go test -run Test_Ctx_Append
+func Test_Ctx_Append(t *testing.T) {
+	t.Parallel()
+	app := New()
+	ctx := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(ctx)
+	ctx.Append("X-Test", "Hello")
+	ctx.Append("X-Test", "World")
+	ctx.Append("X-Test", "Hello", "World")
+	ctx.Append("X-Custom-Header")
+	utils.AssertEqual(t, "Hello, World", string(ctx.Fasthttp.Response.Header.Peek("X-Test")))
+	utils.AssertEqual(t, "", string(ctx.Fasthttp.Response.Header.Peek("x-custom-header")))
+}
+
+// go test -v -run=^$ -bench=Benchmark_Ctx_Append -benchmem -count=4
+func Benchmark_Ctx_Append(b *testing.B) {
+	app := New()
+	c := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(c)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for n := 0; n < b.N; n++ {
+		c.Append("X-Custom-Header", "Hello")
+		c.Append("X-Custom-Header", "World")
+		c.Append("X-Custom-Header", "Hello")
+	}
+	utils.AssertEqual(b, "Hello, World", getString(c.Fasthttp.Response.Header.Peek("X-Custom-Header")))
+}
+
+// go test -run Test_Ctx_Attachment
+func Test_Ctx_Attachment(t *testing.T) {
+	t.Parallel()
+	app := New()
+	ctx := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(ctx)
+	ctx.Attachment()
+	ctx.Attachment("./static/img/logo.png")
+	utils.AssertEqual(t, `attachment; filename="logo.png"`, string(ctx.Fasthttp.Response.Header.Peek(HeaderContentDisposition)))
+	utils.AssertEqual(t, "image/png", string(ctx.Fasthttp.Response.Header.Peek(HeaderContentType)))
+}
+
+// go test -run Test_Ctx_BaseURL
+func Test_Ctx_BaseURL(t *testing.T) {
+	t.Parallel()
+	app := New()
+	ctx := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(ctx)
+	ctx.Fasthttp.Request.SetRequestURI("http://google.com/test")
+	utils.AssertEqual(t, "http://google.com", ctx.BaseURL())
+}
+
+// go test -v -run=^$ -bench=Benchmark_Ctx_Append -benchmem -count=4
+func Benchmark_Ctx_BaseURL(b *testing.B) {
+	app := New()
+	c := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(c)
+	c.Fasthttp.Request.SetHost("google.com:1337")
+	c.Fasthttp.Request.URI().SetPath("/haha/oke/lol")
+	var res string
+	b.ReportAllocs()
+	b.ResetTimer()
+	for n := 0; n < b.N; n++ {
+		res = c.BaseURL()
+	}
+	utils.AssertEqual(b, "http://google.com:1337", res)
+}
+
+// go test -run Test_Ctx_Body
+func Test_Ctx_Body(t *testing.T) {
+	t.Parallel()
+	app := New()
+	ctx := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(ctx)
+	ctx.Fasthttp.Request.SetBody([]byte("john=doe"))
+	utils.AssertEqual(t, "john=doe", ctx.Body())
+}
+
+// go test -run Test_Ctx_BodyParser
+func Test_Ctx_BodyParser(t *testing.T) {
+	t.Parallel()
+	app := New()
+	ctx := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(ctx)
 	type Demo struct {
 		Name string `json:"name" xml:"name" form:"name" query:"name"`
 	}
-	app.Post("/test", func(c *Ctx) {
-		d := new(Demo)
-		err := c.BodyParser(d)
-		if err != nil {
-			t.Fatalf(`%s: BodyParser %v`, t.Name(), err)
-		}
-		if d.Name != "john" {
-			t.Fatalf(`%s: Expect %s got %s`, t.Name(), "john", d)
-		}
-	})
-	req := httptest.NewRequest("POST", "/test", bytes.NewBuffer([]byte(`{"name":"john"}`)))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Content-Length", strconv.Itoa(len([]byte(`{"name":"john"}`))))
+	ctx.Fasthttp.Request.SetBody([]byte(`{"name":"john"}`))
+	ctx.Fasthttp.Request.Header.SetContentType(MIMEApplicationJSON)
+	ctx.Fasthttp.Request.Header.SetContentLength(len([]byte(`{"name":"john"}`)))
+	d := new(Demo)
+	utils.AssertEqual(t, nil, ctx.BodyParser(d))
+	utils.AssertEqual(t, "john", d.Name)
 
-	_, err := app.Test(req)
-	if err != nil {
-		t.Fatalf(`%s: %s`, t.Name(), err)
+	type Query struct {
+		ID    int
+		Name  string
+		Hobby []string
 	}
-
-	// data := url.Values{}
-	// data.Set("name", "john")
-	// req = httptest.NewRequest("POST", "/test", strings.NewReader(data.Encode()))
-	// req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
-	// req.Header.Add("Content-Length", strconv.Itoa(len(data.Encode())))
-
-	// _, err = app.Test(req)
-	// if err != nil {
-	// 	t.Fatalf(`%s: %s`, t.Name(), err)
-	// }
-
-	// req = httptest.NewRequest("POST", "/test", bytes.NewBuffer([]byte(`<name>john</name>`)))
-	// req.Header.Set("Content-Type", "application/xml")
-	// req.Header.Set("Content-Length", strconv.Itoa(len([]byte(`<name>john</name>`))))
-
-	// _, err = app.Test(req)
-	// if err != nil {
-	// 	t.Fatalf(`%s: %s`, t.Name(), err)
-	// }
+	ctx.Fasthttp.Request.SetBody([]byte(``))
+	ctx.Fasthttp.Request.Header.SetContentType("")
+	ctx.Fasthttp.Request.URI().SetQueryString("id=1&name=tom&hobby=basketball&hobby=football")
+	q := new(Query)
+	utils.AssertEqual(t, nil, ctx.BodyParser(q))
+	utils.AssertEqual(t, 2, len(q.Hobby))
 }
-func Test_Cookies(t *testing.T) {
+
+// TODO Benchmark_Ctx_BodyParser
+
+// go test -run Test_Ctx_Context
+func Test_Ctx_Context(t *testing.T) {
+	t.Parallel()
 	app := New()
-	app.Get("/test", func(c *Ctx) {
-		expect := "john=doe"
-		result := c.Cookies()
-		if result != expect {
-			t.Fatalf(`%s: Expecting %s, got %s`, t.Name(), expect, result)
-		}
-		expect = "doe"
-		result = c.Cookies("john")
-		if result != expect {
-			t.Fatalf(`%s: Expecting %s, got %s`, t.Name(), expect, result)
-		}
+	ctx := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(ctx)
+
+	utils.AssertEqual(t, "*fasthttp.RequestCtx", fmt.Sprintf("%T", ctx.Context()))
+}
+
+// go test -run Test_Ctx_Cookie
+func Test_Ctx_Cookie(t *testing.T) {
+	t.Parallel()
+	app := New()
+	ctx := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(ctx)
+	expire := time.Now().Add(24 * time.Hour)
+	var dst []byte
+	dst = expire.In(time.UTC).AppendFormat(dst, time.RFC1123)
+	httpdate := strings.Replace(string(dst), "UTC", "GMT", -1)
+	ctx.Cookie(&Cookie{
+		Name:    "username",
+		Value:   "john",
+		Expires: expire,
 	})
+	expect := "username=john; expires=" + httpdate + "; path=/; SameSite=Lax"
+	utils.AssertEqual(t, expect, string(ctx.Fasthttp.Response.Header.Peek(HeaderSetCookie)))
 
-	req, _ := http.NewRequest("GET", "/test", nil)
-	req.AddCookie(&http.Cookie{Name: "john", Value: "doe"})
-	_, err := app.Test(req)
-	if err != nil {
-		t.Fatalf(`%s: %s`, t.Name(), err)
-	}
+	ctx.Cookie(&Cookie{SameSite: "strict"})
+	ctx.Cookie(&Cookie{SameSite: "none"})
 }
-func Test_FormFile(t *testing.T) {
-	// TODO
-}
-func Test_FormValue(t *testing.T) {
+
+// go test -v -run=^$ -bench=Benchmark_Ctx_Cookie -benchmem -count=4
+func Benchmark_Ctx_Cookie(b *testing.B) {
 	app := New()
+	c := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(c)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for n := 0; n < b.N; n++ {
+		c.Cookie(&Cookie{
+			Name:  "John",
+			Value: "Doe",
+		})
+	}
+	utils.AssertEqual(b, "John=Doe; path=/; SameSite=Lax", getString(c.Fasthttp.Response.Header.Peek("Set-Cookie")))
+}
+
+// go test -run Test_Ctx_Cookies
+func Test_Ctx_Cookies(t *testing.T) {
+	t.Parallel()
+	app := New()
+	ctx := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(ctx)
+	ctx.Fasthttp.Request.Header.Set("Cookie", "john=doe")
+	utils.AssertEqual(t, "doe", ctx.Cookies("john"))
+}
+
+// go test -run Test_Ctx_Format
+func Test_Ctx_Format(t *testing.T) {
+	t.Parallel()
+	app := New()
+	ctx := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(ctx)
+	ctx.Fasthttp.Request.Header.Set(HeaderAccept, "plain/text")
+	ctx.Format([]byte("Hello, World!"))
+	utils.AssertEqual(t, "Hello, World!", string(ctx.Fasthttp.Response.Body()))
+
+	ctx.Fasthttp.Request.Header.Set(HeaderAccept, "text/html")
+	ctx.Format("Hello, World!")
+	utils.AssertEqual(t, "<p>Hello, World!</p>", string(ctx.Fasthttp.Response.Body()))
+
+	ctx.Fasthttp.Request.Header.Set(HeaderAccept, "application/json")
+	ctx.Format("Hello, World!")
+	utils.AssertEqual(t, `"Hello, World!"`, string(ctx.Fasthttp.Response.Body()))
+
+	ctx.Fasthttp.Request.Header.Set(HeaderAccept, "application/xml")
+	ctx.Format("Hello, World!")
+	utils.AssertEqual(t, `<string>Hello, World!</string>`, string(ctx.Fasthttp.Response.Body()))
+
+	ctx.Fasthttp.Request.Header.Set(HeaderAccept, "broken/accept")
+	ctx.Format("Hello, World!")
+	utils.AssertEqual(t, `Hello, World!`, string(ctx.Fasthttp.Response.Body()))
+}
+
+// go test -v -run=^$ -bench=Benchmark_Ctx_Format -benchmem -count=4
+func Benchmark_Ctx_Format(b *testing.B) {
+	app := New()
+	c := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(c)
+	c.Fasthttp.Request.Header.Set("Accept", "text/plain")
+	b.ReportAllocs()
+	b.ResetTimer()
+	for n := 0; n < b.N; n++ {
+		c.Format("Hello, World!")
+	}
+	utils.AssertEqual(b, `Hello, World!`, string(c.Fasthttp.Response.Body()))
+}
+
+// go test -v -run=^$ -bench=Benchmark_Ctx_Format_HTML -benchmem -count=4
+func Benchmark_Ctx_Format_HTML(b *testing.B) {
+	app := New()
+	c := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(c)
+	c.Fasthttp.Request.Header.Set("Accept", "text/html")
+	b.ReportAllocs()
+	b.ResetTimer()
+	for n := 0; n < b.N; n++ {
+		c.Format("Hello, World!")
+	}
+	utils.AssertEqual(b, "<p>Hello, World!</p>", string(c.Fasthttp.Response.Body()))
+}
+
+// go test -v -run=^$ -bench=Benchmark_Ctx_Format_JSON -benchmem -count=4
+func Benchmark_Ctx_Format_JSON(b *testing.B) {
+	app := New()
+	c := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(c)
+	c.Fasthttp.Request.Header.Set("Accept", "application/json")
+	b.ReportAllocs()
+	b.ResetTimer()
+	for n := 0; n < b.N; n++ {
+		c.Format("Hello, World!")
+	}
+	utils.AssertEqual(b, `"Hello, World!"`, string(c.Fasthttp.Response.Body()))
+}
+
+// go test -v -run=^$ -bench=Benchmark_Ctx_Format_XML -benchmem -count=4
+func Benchmark_Ctx_Format_XML(b *testing.B) {
+	app := New()
+	c := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(c)
+	c.Fasthttp.Request.Header.Set("Accept", "application/xml")
+	b.ReportAllocs()
+	b.ResetTimer()
+	for n := 0; n < b.N; n++ {
+		c.Format("Hello, World!")
+	}
+	utils.AssertEqual(b, `<string>Hello, World!</string>`, string(c.Fasthttp.Response.Body()))
+}
+
+// go test -run Test_Ctx_FormFile
+func Test_Ctx_FormFile(t *testing.T) {
+	// TODO: CLEAN THIS UP
+	t.Parallel()
+	app := New()
+
 	app.Post("/test", func(c *Ctx) {
-		expect := "john"
-		result := c.FormValue("name")
-		if result != expect {
-			t.Fatalf(`%s: Expecting %s, got %s`, t.Name(), expect, result)
-		}
+		fh, err := c.FormFile("file")
+		utils.AssertEqual(t, nil, err)
+		utils.AssertEqual(t, "test", fh.Filename)
+
+		f, err := fh.Open()
+		utils.AssertEqual(t, nil, err)
+
+		b := new(bytes.Buffer)
+		_, err = io.Copy(b, f)
+		utils.AssertEqual(t, nil, err)
+
+		f.Close()
+		utils.AssertEqual(t, "hello world", b.String())
 	})
 
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
 
-	if err := writer.WriteField("name", "john"); err != nil {
-		t.Fatalf(`%s: %s`, t.Name(), err)
-	}
+	ioWriter, err := writer.CreateFormFile("file", "test")
+	utils.AssertEqual(t, nil, err)
+
+	_, err = ioWriter.Write([]byte("hello world"))
+	utils.AssertEqual(t, nil, err)
+
 	writer.Close()
-	req, _ := http.NewRequest("POST", "/test", body)
-	contentType := fmt.Sprintf("multipart/form-data; boundary=%s", writer.Boundary())
 
-	req.Header.Set("Content-Type", contentType)
+	req := httptest.NewRequest(MethodPost, "/test", body)
+	req.Header.Set(HeaderContentType, writer.FormDataContentType())
+	req.Header.Set(HeaderContentLength, strconv.Itoa(len(body.Bytes())))
+
+	resp, err := app.Test(req)
+	utils.AssertEqual(t, nil, err, "app.Test(req)")
+	utils.AssertEqual(t, StatusOK, resp.StatusCode, "Status code")
+}
+
+// go test -run Test_Ctx_FormValue
+func Test_Ctx_FormValue(t *testing.T) {
+	t.Parallel()
+	app := New()
+
+	app.Post("/test", func(c *Ctx) {
+		utils.AssertEqual(t, "john", c.FormValue("name"))
+	})
+
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+
+	utils.AssertEqual(t, nil, writer.WriteField("name", "john"))
+
+	writer.Close()
+	req := httptest.NewRequest(MethodPost, "/test", body)
+	req.Header.Set("Content-Type", fmt.Sprintf("multipart/form-data; boundary=%s", writer.Boundary()))
 	req.Header.Set("Content-Length", strconv.Itoa(len(body.Bytes())))
+
 	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf(`%s: %s`, t.Name(), err)
-	}
-	if resp.StatusCode != 200 {
-		t.Fatalf(`%s: StatusCode %v`, t.Name(), resp.StatusCode)
-	}
-}
-func Test_Fresh(t *testing.T) {
-	app := New()
-	app.Get("/test", func(c *Ctx) {
-		c.Fresh()
-	})
-	req, _ := http.NewRequest("GET", "/test", nil)
-	_, err := app.Test(req)
-	if err != nil {
-		t.Fatalf(`%s: %s`, t.Name(), err)
-	}
-}
-func Test_Get(t *testing.T) {
-	app := New()
-	app.Get("/test", func(c *Ctx) {
-		expect := "utf-8, iso-8859-1;q=0.5"
-		result := c.Get("Accept-Charset")
-		if result != expect {
-			t.Fatalf(`%s: Expecting %s, got %s`, t.Name(), expect, result)
-		}
-		expect = "Monster"
-		result = c.Get("referrer")
-		if result != expect {
-			t.Fatalf(`%s: Expecting %s, got %s`, t.Name(), expect, result)
-		}
-	})
-	req, _ := http.NewRequest("GET", "/test", nil)
-	req.Header.Set("Accept-Charset", "utf-8, iso-8859-1;q=0.5")
-	req.Header.Set("Referer", "Monster")
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf(`%s: %s`, t.Name(), err)
-	}
-	if resp.StatusCode != 200 {
-		t.Fatalf(`%s: StatusCode %v`, t.Name(), resp.StatusCode)
-	}
-}
-func Test_Hostname(t *testing.T) {
-	app := New()
-	app.Get("/test", func(c *Ctx) {
-		expect := "google.com"
-		result := c.Hostname()
-		if result != expect {
-			t.Fatalf(`%s: Expecting %s, got %s`, t.Name(), expect, result)
-		}
-	})
-	req, _ := http.NewRequest("GET", "http://google.com/test", nil)
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf(`%s: %s`, t.Name(), err)
-	}
-	if resp.StatusCode != 200 {
-		t.Fatalf(`%s: StatusCode %v`, t.Name(), resp.StatusCode)
-	}
-}
-func Test_IP(t *testing.T) {
-	app := New()
-	app.Get("/test", func(c *Ctx) {
-		expect := "0.0.0.0"
-		result := c.IP()
-		if result != expect {
-			t.Fatalf(`%s: Expecting %s, got %s`, t.Name(), expect, result)
-		}
-	})
-	req, _ := http.NewRequest("GET", "http://google.com/test", nil)
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf(`%s: %s`, t.Name(), err)
-	}
-	if resp.StatusCode != 200 {
-		t.Fatalf(`%s: StatusCode %v`, t.Name(), resp.StatusCode)
-	}
-}
-func Test_IPs(t *testing.T) {
-	app := New()
-	app.Get("/test", func(c *Ctx) {
-		expect := []string{"0.0.0.0", "1.1.1.1"}
-		result := c.IPs()
-		if result[0] != expect[0] && result[1] != expect[1] {
-			t.Fatalf(`%s: Expecting %s, got %s`, t.Name(), expect, result)
-		}
-	})
-	req, _ := http.NewRequest("GET", "/test", nil)
-	req.Header.Set("X-Forwarded-For", "0.0.0.0, 1.1.1.1")
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf(`%s: %s`, t.Name(), err)
-	}
-	if resp.StatusCode != 200 {
-		t.Fatalf(`%s: StatusCode %v`, t.Name(), resp.StatusCode)
-	}
+	utils.AssertEqual(t, nil, err, "app.Test(req)")
+	utils.AssertEqual(t, StatusOK, resp.StatusCode, "Status code")
 }
 
-// func Test_Is(t *testing.T) {
-// 	app := New()
-// 	app.Get("/test", func(c *Ctx) {
-// 		c.Is(".json")
-// 		expect := true
-// 		result := c.Is("html")
-// 		if result != expect {
-// 			t.Fatalf(`%s: Expecting %v, got %v`, t.Name(), expect, result)
-// 		}
-// 	})
-// 	req, _ := http.NewRequest("GET", "/test", nil)
-// 	req.Header.Set("Content-Type", "text/html")
-// 	resp, err := app.Test(req)
-// 	if err != nil {
-// 		t.Fatalf(`%s: %s`, t.Name(), err)
-// 	}
-// 	if resp.StatusCode != 200 {
-// 		t.Fatalf(`%s: StatusCode %v`, t.Name(), resp.StatusCode)
-// 	}
-// }
-func Test_Locals(t *testing.T) {
+// go test -run Test_Ctx_Fresh
+func Test_Ctx_Fresh(t *testing.T) {
+	t.Parallel()
+	app := New()
+	ctx := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(ctx)
+	utils.AssertEqual(t, false, ctx.Fresh())
+}
+
+// go test -run Test_Ctx_Get
+func Test_Ctx_Get(t *testing.T) {
+	t.Parallel()
+	app := New()
+	ctx := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(ctx)
+	ctx.Fasthttp.Request.Header.Set(HeaderAcceptCharset, "utf-8, iso-8859-1;q=0.5")
+	ctx.Fasthttp.Request.Header.Set(HeaderReferer, "Monster")
+	utils.AssertEqual(t, "utf-8, iso-8859-1;q=0.5", ctx.Get(HeaderAcceptCharset))
+	utils.AssertEqual(t, "Monster", ctx.Get(HeaderReferer))
+}
+
+// go test -run Test_Ctx_Hostname
+func Test_Ctx_Hostname(t *testing.T) {
+	t.Parallel()
+	app := New()
+	ctx := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(ctx)
+	ctx.Fasthttp.Request.SetRequestURI("http://google.com/test")
+	utils.AssertEqual(t, "google.com", ctx.Hostname())
+}
+
+// go test -run Test_Ctx_IP
+func Test_Ctx_IP(t *testing.T) {
+	t.Parallel()
+	app := New()
+	ctx := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(ctx)
+	utils.AssertEqual(t, "0.0.0.0", ctx.IP())
+}
+
+// go test -run Test_Ctx_IPs
+func Test_Ctx_IPs(t *testing.T) {
+	t.Parallel()
+	app := New()
+	ctx := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(ctx)
+	ctx.Fasthttp.Request.Header.Set(HeaderXForwardedFor, "127.0.0.1, 127.0.0.1, 127.0.0.1")
+	utils.AssertEqual(t, []string{"127.0.0.1", "127.0.0.1", "127.0.0.1"}, ctx.IPs())
+}
+
+// go test -v -run=^$ -bench=Benchmark_Ctx_IPs -benchmem -count=4
+func Benchmark_Ctx_IPs(b *testing.B) {
+	app := New()
+	c := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(c)
+	c.Fasthttp.Request.Header.Set(HeaderXForwardedFor, "127.0.0.1, 127.0.0.1, 127.0.0.1")
+	var res []string
+	b.ReportAllocs()
+	b.ResetTimer()
+	for n := 0; n < b.N; n++ {
+		res = c.IPs()
+	}
+	utils.AssertEqual(b, []string{"127.0.0.1", "127.0.0.1", "127.0.0.1"}, res)
+}
+
+// go test -run Test_Ctx_Is
+func Test_Ctx_Is(t *testing.T) {
+	t.Parallel()
+	app := New()
+	ctx := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(ctx)
+	ctx.Fasthttp.Request.Header.Set(HeaderContentType, MIMETextHTML+"; boundary=something")
+	utils.AssertEqual(t, true, ctx.Is(".html"))
+	utils.AssertEqual(t, true, ctx.Is("html"))
+	utils.AssertEqual(t, false, ctx.Is("json"))
+	utils.AssertEqual(t, false, ctx.Is(".json"))
+	utils.AssertEqual(t, false, ctx.Is(""))
+	utils.AssertEqual(t, false, ctx.Is(".foooo"))
+}
+
+// go test -v -run=^$ -bench=Benchmark_Ctx_Is -benchmem -count=4
+func Benchmark_Ctx_Is(b *testing.B) {
+	app := New()
+	c := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(c)
+	c.Fasthttp.Request.Header.Set(HeaderContentType, MIMEApplicationJSON)
+	var res bool
+	b.ReportAllocs()
+	b.ResetTimer()
+	for n := 0; n < b.N; n++ {
+		_ = c.Is(".json")
+		res = c.Is("json")
+	}
+	utils.AssertEqual(b, true, res)
+}
+
+// go test -run Test_Ctx_Locals
+func Test_Ctx_Locals(t *testing.T) {
 	app := New()
 	app.Use(func(c *Ctx) {
 		c.Locals("john", "doe")
 		c.Next()
 	})
 	app.Get("/test", func(c *Ctx) {
-		expect := "doe"
-		result := c.Locals("john")
-		if result != expect {
-			t.Fatalf(`%s: Expecting %s, got %s`, t.Name(), expect, result)
-		}
+		utils.AssertEqual(t, "doe", c.Locals("john"))
 	})
-	req, _ := http.NewRequest("GET", "/test", nil)
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf(`%s: %s`, t.Name(), err)
-	}
-	if resp.StatusCode != 200 {
-		t.Fatalf(`%s: StatusCode %v`, t.Name(), resp.StatusCode)
-	}
+	resp, err := app.Test(httptest.NewRequest(MethodGet, "/test", nil))
+	utils.AssertEqual(t, nil, err, "app.Test(req)")
+	utils.AssertEqual(t, StatusOK, resp.StatusCode, "Status code")
 }
-func Test_Method(t *testing.T) {
+
+// go test -run Test_Ctx_Method
+func Test_Ctx_Method(t *testing.T) {
+	t.Parallel()
+	fctx := &fasthttp.RequestCtx{}
+	fctx.Request.Header.SetMethod(MethodGet)
 	app := New()
-	app.Get("/test", func(c *Ctx) {
-		expect := "GET"
-		result := c.Method()
-		if result != expect {
-			t.Fatalf(`%s: Expecting %s, got %s`, t.Name(), expect, result)
-		}
-	})
-	app.Post("/test", func(c *Ctx) {
-		expect := "POST"
-		result := c.Method()
-		if result != expect {
-			t.Fatalf(`%s: Expecting %s, got %s`, t.Name(), expect, result)
-		}
-	})
-	app.Put("/test", func(c *Ctx) {
-		expect := "PUT"
-		result := c.Method()
-		if result != expect {
-			t.Fatalf(`%s: Expecting %s, got %s`, t.Name(), expect, result)
-		}
-	})
-	req, _ := http.NewRequest("GET", "/test", nil)
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf(`%s: %s`, t.Name(), err)
-	}
-	if resp.StatusCode != 200 {
-		t.Fatalf(`%s: StatusCode %v`, t.Name(), resp.StatusCode)
-	}
-	req, _ = http.NewRequest("POST", "/test", nil)
-	resp, err = app.Test(req)
-	if err != nil {
-		t.Fatalf(`%s: %s`, t.Name(), err)
-	}
-	if resp.StatusCode != 200 {
-		t.Fatalf(`%s: StatusCode %v`, t.Name(), resp.StatusCode)
-	}
-	req, _ = http.NewRequest("PUT", "/test", nil)
-	resp, err = app.Test(req)
-	if err != nil {
-		t.Fatalf(`%s: %s`, t.Name(), err)
-	}
-	if resp.StatusCode != 200 {
-		t.Fatalf(`%s: StatusCode %v`, t.Name(), resp.StatusCode)
-	}
+	ctx := app.AcquireCtx(fctx)
+	defer app.ReleaseCtx(ctx)
+	utils.AssertEqual(t, MethodGet, ctx.Method())
+	ctx.Method(MethodPost)
+	utils.AssertEqual(t, MethodPost, ctx.Method())
 }
-func Test_MultipartForm(t *testing.T) {
+
+// go test -run Test_Ctx_MultipartForm
+func Test_Ctx_MultipartForm(t *testing.T) {
+	t.Parallel()
 	app := New()
+
 	app.Post("/test", func(c *Ctx) {
-		expect := "john"
 		result, err := c.MultipartForm()
-		if err != nil {
-			t.Fatalf(`%s: Expecting %s, got %s`, t.Name(), expect, err)
-		}
-		if result.Value["name"][0] != expect {
-			t.Fatalf(`%s: Expecting %s, got %v`, t.Name(), expect, result)
-		}
+		utils.AssertEqual(t, nil, err)
+		utils.AssertEqual(t, "john", result.Value["name"][0])
 	})
 
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
 
-	if err := writer.WriteField("name", "john"); err != nil {
-		t.Fatalf(`%s: %s`, t.Name(), err)
-	}
-	writer.Close()
-	req, _ := http.NewRequest("POST", "/test", body)
-	contentType := fmt.Sprintf("multipart/form-data; boundary=%s", writer.Boundary())
+	utils.AssertEqual(t, nil, writer.WriteField("name", "john"))
 
-	req.Header.Set("Content-Type", contentType)
-	req.Header.Set("Content-Length", strconv.Itoa(len(body.Bytes())))
+	writer.Close()
+	req := httptest.NewRequest(MethodPost, "/test", body)
+	req.Header.Set(HeaderContentType, fmt.Sprintf("multipart/form-data; boundary=%s", writer.Boundary()))
+	req.Header.Set(HeaderContentLength, strconv.Itoa(len(body.Bytes())))
+
 	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf(`%s: %s`, t.Name(), err)
-	}
-	if resp.StatusCode != 200 {
-		t.Fatalf(`%s: StatusCode %v`, t.Name(), resp.StatusCode)
-	}
+	utils.AssertEqual(t, nil, err, "app.Test(req)")
+	utils.AssertEqual(t, StatusOK, resp.StatusCode, "Status code")
 }
-func Test_OriginalURL(t *testing.T) {
+
+// go test -run Test_Ctx_OriginalURL
+func Test_Ctx_OriginalURL(t *testing.T) {
+	t.Parallel()
 	app := New()
-	app.Get("/test", func(c *Ctx) {
-		expect := "/test?search=demo"
-		result := c.OriginalURL()
-		if result != expect {
-			t.Fatalf(`%s: Expecting %s, got %s`, t.Name(), expect, result)
-		}
-	})
-	req, _ := http.NewRequest("GET", "http://google.com/test?search=demo", nil)
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf(`%s: %s`, t.Name(), err)
-	}
-	if resp.StatusCode != 200 {
-		t.Fatalf(`%s: StatusCode %v`, t.Name(), resp.StatusCode)
-	}
+	ctx := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(ctx)
+	ctx.Fasthttp.Request.Header.SetRequestURI("http://google.com/test?search=demo")
+	utils.AssertEqual(t, "http://google.com/test?search=demo", ctx.OriginalURL())
 }
-func Test_Params(t *testing.T) {
+
+// go test -race -run Test_Ctx_Params
+func Test_Ctx_Params(t *testing.T) {
+	t.Parallel()
 	app := New()
 	app.Get("/test/:user", func(c *Ctx) {
-		expect := "john"
-		result := c.Params("user")
-		if result != expect {
-			t.Fatalf(`%s: Expecting %s, got %s`, t.Name(), expect, result)
-		}
+		utils.AssertEqual(t, "john", c.Params("user"))
 	})
 	app.Get("/test2/*", func(c *Ctx) {
-		expect := "im/a/cookie"
-		result := c.Params("*")
-		if result != expect {
-			t.Fatalf(`%s: Expecting %s, got %s`, t.Name(), expect, result)
-		}
+		utils.AssertEqual(t, "im/a/cookie", c.Params("*"))
 	})
-	req, _ := http.NewRequest("GET", "/test/john", nil)
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf(`%s: %s`, t.Name(), err)
-	}
-	if resp.StatusCode != 200 {
-		t.Fatalf(`%s: StatusCode %v`, t.Name(), resp.StatusCode)
-	}
-	req, _ = http.NewRequest("GET", "/test2/im/a/cookie", nil)
-	resp, err = app.Test(req)
-	if err != nil {
-		t.Fatalf(`%s: %s`, t.Name(), err)
-	}
-	if resp.StatusCode != 200 {
-		t.Fatalf(`%s: StatusCode %v`, t.Name(), resp.StatusCode)
-	}
+	app.Get("/test3/:optional?", func(c *Ctx) {
+		utils.AssertEqual(t, "", c.Params("optional"))
+	})
+	resp, err := app.Test(httptest.NewRequest(MethodGet, "/test/john", nil))
+	utils.AssertEqual(t, nil, err, "app.Test(req)")
+	utils.AssertEqual(t, StatusOK, resp.StatusCode, "Status code")
+	resp, err = app.Test(httptest.NewRequest(MethodGet, "/test2/im/a/cookie", nil))
+	utils.AssertEqual(t, nil, err, "app.Test(req)")
+	utils.AssertEqual(t, StatusOK, resp.StatusCode, "Status code")
+	resp, err = app.Test(httptest.NewRequest(MethodGet, "/test3", nil))
+	utils.AssertEqual(t, nil, err, "app.Test(req)")
+	utils.AssertEqual(t, StatusOK, resp.StatusCode, "Status code")
 }
-func Test_Path(t *testing.T) {
+
+// go test -v -run=^$ -bench=Benchmark_Ctx_Params -benchmem -count=4
+func Benchmark_Ctx_Params(b *testing.B) {
+	app := New()
+	c := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(c)
+	c.route = &Route{
+		routeParams: []string{
+			"param1", "param2", "param3", "param4",
+		},
+	}
+	c.values = []string{
+		"john", "doe", "is", "awesome",
+	}
+	var res string
+	b.ReportAllocs()
+	b.ResetTimer()
+	for n := 0; n < b.N; n++ {
+		_ = c.Params("param1")
+		_ = c.Params("param2")
+		_ = c.Params("param3")
+		res = c.Params("param4")
+	}
+	utils.AssertEqual(b, "awesome", res)
+}
+
+// go test -run Test_Ctx_Path
+func Test_Ctx_Path(t *testing.T) {
+	t.Parallel()
 	app := New()
 	app.Get("/test/:user", func(c *Ctx) {
-		expect := "/test/john"
-		result := c.Path()
-		if result != expect {
-			t.Fatalf(`%s: Expecting %s, got %s`, t.Name(), expect, result)
-		}
+		utils.AssertEqual(t, "/test/john", c.Path())
+		// not strict && case insensitive
+		utils.AssertEqual(t, "/ABC/", c.Path("/ABC/"))
+		utils.AssertEqual(t, "/test/john/", c.Path("/test/john/"))
 	})
-	req, _ := http.NewRequest("GET", "/test/john", nil)
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf(`%s: %s`, t.Name(), err)
-	}
-	if resp.StatusCode != 200 {
-		t.Fatalf(`%s: StatusCode %v`, t.Name(), resp.StatusCode)
-	}
-}
-func Test_Query(t *testing.T) {
-	app := New()
-	app.Get("/test", func(c *Ctx) {
-		expect := "john"
-		result := c.Query("search")
-		if result != expect {
-			t.Fatalf(`%s: Expecting %s, got %s`, t.Name(), expect, result)
-		}
-		expect = "20"
-		result = c.Query("age")
-		if result != expect {
-			t.Fatalf(`%s: Expecting %s, got %s`, t.Name(), expect, result)
-		}
-	})
-	req, _ := http.NewRequest("GET", "/test?search=john&age=20", nil)
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf(`%s: %s`, t.Name(), err)
-	}
-	if resp.StatusCode != 200 {
-		t.Fatalf(`%s: StatusCode %v`, t.Name(), resp.StatusCode)
-	}
-}
-func Test_Range(t *testing.T) {
-	app := New()
-	app.Get("/test", func(c *Ctx) {
-		result, err := c.Range(1000)
-		if err != nil {
-			t.Fatalf(`%s: %s`, t.Name(), err)
-			return
-		}
-		expect := "bytes"
-		if result.Type != expect {
-			t.Fatalf(`%s: Expecting %s, got %s`, t.Name(), expect, result.Type)
-		}
-		expectNum := 500
-		if result.Ranges[0].Start != expectNum {
-			t.Fatalf(`%s: Expecting %v, got %v`, t.Name(), expectNum, result.Ranges[0].Start)
-		}
-		expectNum = 700
-		if result.Ranges[0].End != expectNum {
-			t.Fatalf(`%s: Expecting %v, got %v`, t.Name(), expectNum, result.Ranges[0].End)
-		}
-	})
-	req, _ := http.NewRequest("GET", "/test", nil)
-	req.Header.Set("range", "bytes=500-700")
-	_, err := app.Test(req)
-	if err != nil {
-		t.Fatalf(`%s: %s`, t.Name(), err)
-	}
-}
-func Test_Route(t *testing.T) {
-	app := New()
-	app.Get("/test", func(c *Ctx) {
-		expect := "/test"
-		result := c.Route().Path
-		if result != expect {
-			t.Fatalf(`%s: Expecting %s, got %s`, t.Name(), expect, result)
-		}
-	})
-	req, _ := http.NewRequest("GET", "/test", nil)
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf(`%s: %s`, t.Name(), err)
-	}
-	if resp.StatusCode != 200 {
-		t.Fatalf(`%s: StatusCode %v`, t.Name(), resp.StatusCode)
-	}
-}
-func Test_SaveFile(t *testing.T) {
-	// TODO
-}
-func Test_Secure(t *testing.T) {
-	app := New()
-	app.Get("/test", func(c *Ctx) {
-		expect := false
-		result := c.Secure()
-		if result != expect {
-			t.Fatalf(`%s: Expecting %v, got %v`, t.Name(), expect, result)
-		}
-	})
-	req, _ := http.NewRequest("GET", "/test", nil)
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf(`%s: %s`, t.Name(), err)
-	}
-	if resp.StatusCode != 200 {
-		t.Fatalf(`%s: StatusCode %v`, t.Name(), resp.StatusCode)
-	}
-}
-func Test_Stale(t *testing.T) {
-	app := New()
-	app.Get("/test", func(c *Ctx) {
-		c.Stale()
-	})
-	req, _ := http.NewRequest("GET", "/test", nil)
-	_, err := app.Test(req)
-	if err != nil {
-		t.Fatalf(`%s: %s`, t.Name(), err)
-	}
-}
-func Test_Subdomains(t *testing.T) {
-	app := New()
-	app.Get("/test", func(c *Ctx) {
-		expect := []string{"john", "doe"}
-		result := c.Subdomains()
-		if result[0] != expect[0] && result[1] != expect[1] {
-			t.Fatalf(`%s: Expecting %s, got %s`, t.Name(), expect, result)
-		}
-	})
-	req, _ := http.NewRequest("GET", "http://john.doe.google.com/test", nil)
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf(`%s: %s`, t.Name(), err)
-	}
-	if resp.StatusCode != 200 {
-		t.Fatalf(`%s: StatusCode %v`, t.Name(), resp.StatusCode)
-	}
-}
-func Test_XHR(t *testing.T) {
-	app := New()
-	app.Get("/test", func(c *Ctx) {
-		expect := true
-		result := c.XHR()
-		if result != expect {
-			t.Fatalf(`%s: Expecting %v, got %v`, t.Name(), expect, result)
-		}
-	})
-	req, _ := http.NewRequest("GET", "/test", nil)
-	req.Header.Set("X-Requested-With", "XMLHttpRequest")
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf(`%s: %s`, t.Name(), err)
-	}
-	if resp.StatusCode != 200 {
-		t.Fatalf(`%s: StatusCode %v`, t.Name(), resp.StatusCode)
-	}
+	resp, err := app.Test(httptest.NewRequest(MethodGet, "/test/john", nil))
+	utils.AssertEqual(t, nil, err, "app.Test(req)")
+	utils.AssertEqual(t, StatusOK, resp.StatusCode, "Status code")
 }
 
-func Test_Append(t *testing.T) {
+// go test -run Test_Ctx_Protocol
+func Test_Ctx_Protocol(t *testing.T) {
 	app := New()
-	app.Get("/test", func(c *Ctx) {
-		c.Append("X-Test", "hel")
-		c.Append("X-Test", "lo", "world")
-	})
-	req, _ := http.NewRequest("GET", "/test", nil)
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf(`%s: %s`, t.Name(), err)
-	}
-	if resp.StatusCode != 200 {
-		t.Fatalf(`%s: StatusCode %v`, t.Name(), resp.StatusCode)
-	}
-	if resp.Header.Get("X-Test") != "hel, lo, world" {
-		t.Fatalf(`%s: Expecting %s`, t.Name(), "X-Test: hel, lo, world")
-	}
-}
-func Test_Attachment(t *testing.T) {
-	app := New()
-	app.Get("/test", func(c *Ctx) {
-		c.Attachment()
-		c.Attachment("./static/img/logo.png")
-	})
-	req, _ := http.NewRequest("GET", "/test", nil)
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf(`%s: %s`, t.Name(), err)
-	}
-	if resp.StatusCode != 200 {
-		t.Fatalf(`%s: StatusCode %v`, t.Name(), resp.StatusCode)
-	}
-	if resp.Header.Get("Content-Disposition") != `attachment; filename="logo.png"` {
-		t.Fatalf(`%s: Expecting %s`, t.Name(), `attachment; filename="logo.png"`)
-	}
-	if resp.Header.Get("Content-Type") != "image/png" {
-		t.Fatalf(`%s: Expecting %s`, t.Name(), "image/png")
-	}
-}
-func Test_ClearCookie(t *testing.T) {
-	app := New()
-	app.Get("/test", func(c *Ctx) {
-		c.ClearCookie()
-	})
-	app.Get("/test2", func(c *Ctx) {
-		c.ClearCookie("john")
-	})
-	req, _ := http.NewRequest("GET", "/test", nil)
-	req.AddCookie(&http.Cookie{Name: "john", Value: "doe"})
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf(`%s: %s`, t.Name(), err)
-	}
-	if resp.StatusCode != 200 {
-		t.Fatalf(`%s: StatusCode %v`, t.Name(), resp.StatusCode)
-	}
-	if !strings.Contains(resp.Header.Get("Set-Cookie"), "expires=") {
-		t.Fatalf(`%s: Expecting %s`, t.Name(), "expires=")
-	}
-	req, _ = http.NewRequest("GET", "/test2", nil)
-	req.AddCookie(&http.Cookie{Name: "john", Value: "doe"})
-	resp, err = app.Test(req)
-	if err != nil {
-		t.Fatalf(`%s: %s`, t.Name(), err)
-	}
-	if resp.StatusCode != 200 {
-		t.Fatalf(`%s: StatusCode %v`, t.Name(), resp.StatusCode)
-	}
-	if !strings.Contains(resp.Header.Get("Set-Cookie"), "expires=") {
-		t.Fatalf(`%s: Expecting %s`, t.Name(), "expires=")
-	}
-}
-func Test_Cookie(t *testing.T) {
-	app := New()
-	expire := time.Now().Add(24 * time.Hour)
-	var dst []byte
-	dst = expire.In(time.UTC).AppendFormat(dst, time.RFC1123)
-	httpdate := strings.Replace(string(dst), "UTC", "GMT", -1)
-	app.Get("/test", func(c *Ctx) {
-		cookie := new(Cookie)
-		cookie.Name = "username"
-		cookie.Value = "jon"
-		cookie.Expires = expire
-		c.Cookie(cookie)
-	})
-	req, _ := http.NewRequest("GET", "http://example.com/test", nil)
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf(`%s: %s`, t.Name(), err)
-	}
-	if resp.StatusCode != 200 {
-		t.Fatalf(`%s: StatusCode %v`, t.Name(), resp.StatusCode)
-	}
-	if !strings.Contains(resp.Header.Get("Set-Cookie"), "username=jon; expires="+string(httpdate)+"; path=/") {
-		t.Fatalf(`%s: Expecting %s`, t.Name(), "username=jon; expires="+string(httpdate)+"; path=/")
-	}
-}
-func Test_Download(t *testing.T) {
-	// TODO
-}
-func Test_Format(t *testing.T) {
-	app := New()
-	app.Get("/test", func(c *Ctx) {
-		c.Format("Hello, World!")
-	})
-	app.Get("/test2", func(c *Ctx) {
-		c.Format([]byte("Hello, World!"))
-		c.Format("Hello, World!")
-	})
-	req, _ := http.NewRequest("GET", "http://example.com/test", nil)
-	req.Header.Set("Accept", "text/html")
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf(`%s: %s`, t.Name(), err)
-	}
-	if resp.StatusCode != 200 {
-		t.Fatalf(`%s: StatusCode %v`, t.Name(), resp.StatusCode)
-	}
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf(`%s: Error %s`, t.Name(), err)
-	}
-	if string(body) != "<p>Hello, World!</p>" {
-		t.Fatalf(`%s: Expecting %s`, t.Name(), "<p>Hello, World!</p>")
-	}
+	ctx := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(ctx)
+	ctx.Fasthttp.Request.Header.Set(HeaderXForwardedProto, "https")
+	utils.AssertEqual(t, "https", ctx.Protocol())
+	ctx.Fasthttp.Request.Header.Reset()
 
-	req, _ = http.NewRequest("GET", "http://example.com/test2", nil)
-	req.Header.Set("Accept", "application/json")
-	resp, err = app.Test(req)
-	if err != nil {
-		t.Fatalf(`%s: %s`, t.Name(), err)
-	}
-	if resp.StatusCode != 200 {
-		t.Fatalf(`%s: StatusCode %v`, t.Name(), resp.StatusCode)
-	}
-	body, err = ioutil.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf(`%s: Error %s`, t.Name(), err)
-	}
-	if string(body) != `"Hello, World!"` {
-		t.Fatalf(`%s: Expecting %s`, t.Name(), `"Hello, World!"`)
-	}
+	ctx.Fasthttp.Request.Header.Set(HeaderXForwardedProtocol, "https")
+	utils.AssertEqual(t, "https", ctx.Protocol())
+	ctx.Fasthttp.Request.Header.Reset()
+
+	ctx.Fasthttp.Request.Header.Set(HeaderXForwardedSsl, "on")
+	utils.AssertEqual(t, "https", ctx.Protocol())
+	ctx.Fasthttp.Request.Header.Reset()
+
+	ctx.Fasthttp.Request.Header.Set(HeaderXUrlScheme, "https")
+	utils.AssertEqual(t, "https", ctx.Protocol())
+	ctx.Fasthttp.Request.Header.Reset()
+
+	utils.AssertEqual(t, "http", ctx.Protocol())
 }
-func Test_HeadersSent(t *testing.T) {
-	// TODO
+
+// go test -v -run=^$ -bench=Benchmark_Ctx_Protocol -benchmem -count=4
+func Benchmark_Ctx_Protocol(b *testing.B) {
+	app := New()
+	c := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(c)
+	var res string
+	b.ReportAllocs()
+	b.ResetTimer()
+	for n := 0; n < b.N; n++ {
+		res = c.Protocol()
+	}
+	utils.AssertEqual(b, "http", res)
 }
-func Test_JSON(t *testing.T) {
+
+// go test -run Test_Ctx_Query
+func Test_Ctx_Query(t *testing.T) {
+	t.Parallel()
+	app := New()
+	ctx := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(ctx)
+	ctx.Fasthttp.Request.URI().SetQueryString("search=john&age=20")
+	utils.AssertEqual(t, "john", ctx.Query("search"))
+	utils.AssertEqual(t, "20", ctx.Query("age"))
+}
+
+// go test -run Test_Ctx_Range
+func Test_Ctx_Range(t *testing.T) {
+	t.Parallel()
+	app := New()
+	ctx := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(ctx)
+	ctx.Fasthttp.Request.Header.Set(HeaderRange, "bytes=500-700")
+	result, err := ctx.Range(1000)
+	utils.AssertEqual(t, nil, err)
+	utils.AssertEqual(t, "bytes", result.Type)
+	utils.AssertEqual(t, 500, result.Ranges[0].Start)
+	utils.AssertEqual(t, 700, result.Ranges[0].End)
+}
+
+// go test -run Test_Ctx_Route
+func Test_Ctx_Route(t *testing.T) {
+	t.Parallel()
+	app := New()
+	app.Get("/test", func(c *Ctx) {
+		utils.AssertEqual(t, "/test", c.Route().Path)
+	})
+	resp, err := app.Test(httptest.NewRequest(MethodGet, "/test", nil))
+	utils.AssertEqual(t, nil, err, "app.Test(req)")
+	utils.AssertEqual(t, StatusOK, resp.StatusCode, "Status code")
+}
+
+// go test -run Test_Ctx_SaveFile
+func Test_Ctx_SaveFile(t *testing.T) {
+	// TODO CLEAN THIS UP
+	t.Parallel()
+	app := New()
+
+	app.Post("/test", func(c *Ctx) {
+		fh, err := c.FormFile("file")
+		utils.AssertEqual(t, nil, err)
+
+		tempFile, err := ioutil.TempFile(os.TempDir(), "test-")
+		utils.AssertEqual(t, nil, err)
+
+		defer os.Remove(tempFile.Name())
+		err = c.SaveFile(fh, tempFile.Name())
+		utils.AssertEqual(t, nil, err)
+
+		bs, err := ioutil.ReadFile(tempFile.Name())
+		utils.AssertEqual(t, nil, err)
+		utils.AssertEqual(t, "hello world", string(bs))
+	})
+
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+
+	ioWriter, err := writer.CreateFormFile("file", "test")
+	utils.AssertEqual(t, nil, err)
+
+	_, err = ioWriter.Write([]byte("hello world"))
+	utils.AssertEqual(t, nil, err)
+	writer.Close()
+
+	req := httptest.NewRequest(MethodPost, "/test", body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("Content-Length", strconv.Itoa(len(body.Bytes())))
+
+	resp, err := app.Test(req)
+	utils.AssertEqual(t, nil, err, "app.Test(req)")
+	utils.AssertEqual(t, StatusOK, resp.StatusCode, "Status code")
+}
+
+// go test -run Test_Ctx_Secure
+func Test_Ctx_Secure(t *testing.T) {
+	t.Parallel()
+	app := New()
+	ctx := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(ctx)
+	// TODO Add TLS conn
+	utils.AssertEqual(t, false, ctx.Secure())
+}
+
+// go test -run Test_Ctx_Stale
+func Test_Ctx_Stale(t *testing.T) {
+	t.Parallel()
+	app := New()
+	ctx := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(ctx)
+	utils.AssertEqual(t, true, ctx.Stale())
+}
+
+// go test -run Test_Ctx_Subdomains
+func Test_Ctx_Subdomains(t *testing.T) {
+	t.Parallel()
+	app := New()
+	ctx := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(ctx)
+	ctx.Fasthttp.Request.URI().SetHost("john.doe.is.awesome.google.com")
+	utils.AssertEqual(t, []string{"john", "doe"}, ctx.Subdomains(4))
+}
+
+// go test -v -run=^$ -bench=Benchmark_Ctx_Subdomains -benchmem -count=4
+func Benchmark_Ctx_Subdomains(b *testing.B) {
+	app := New()
+	c := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(c)
+	c.Fasthttp.Request.SetRequestURI("http://john.doe.google.com")
+	var res []string
+	b.ReportAllocs()
+	b.ResetTimer()
+	for n := 0; n < b.N; n++ {
+		res = c.Subdomains()
+	}
+	utils.AssertEqual(b, []string{"john", "doe"}, res)
+}
+
+// go test -run Test_Ctx_ClearCookie
+func Test_Ctx_ClearCookie(t *testing.T) {
+	t.Parallel()
+	app := New()
+	ctx := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(ctx)
+	ctx.Fasthttp.Request.Header.Set(HeaderCookie, "john=doe")
+	ctx.ClearCookie("john")
+	utils.AssertEqual(t, true, strings.HasPrefix(string(ctx.Fasthttp.Response.Header.Peek(HeaderSetCookie)), "john=; expires="))
+
+	ctx.Fasthttp.Request.Header.Set(HeaderCookie, "test1=dummy")
+	ctx.Fasthttp.Request.Header.Set(HeaderCookie, "test2=dummy")
+	ctx.ClearCookie()
+	utils.AssertEqual(t, true, strings.Contains(string(ctx.Fasthttp.Response.Header.Peek(HeaderSetCookie)), "test1=; expires="))
+	utils.AssertEqual(t, true, strings.Contains(string(ctx.Fasthttp.Response.Header.Peek(HeaderSetCookie)), "test2=; expires="))
+}
+
+// go test -race -run Test_Ctx_Download
+func Test_Ctx_Download(t *testing.T) {
+	t.Parallel()
+	app := New()
+	ctx := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(ctx)
+
+	ctx.Download("ctx.go", "Awesome File!")
+
+	f, err := os.Open("./ctx.go")
+	utils.AssertEqual(t, nil, err)
+	defer f.Close()
+
+	expect, err := ioutil.ReadAll(f)
+	utils.AssertEqual(t, nil, err)
+	utils.AssertEqual(t, expect, ctx.Fasthttp.Response.Body())
+}
+
+// go test -run Test_Ctx_JSON
+func Test_Ctx_JSON(t *testing.T) {
+	t.Parallel()
+	app := New()
+	ctx := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(ctx)
+	ctx.JSON(Map{ // map has no order
+		"Name": "Grame",
+		"Age":  20,
+	})
+	utils.AssertEqual(t, `{"Age":20,"Name":"Grame"}`, string(ctx.Fasthttp.Response.Body()))
+	utils.AssertEqual(t, "application/json", string(ctx.Fasthttp.Response.Header.Peek("content-type")))
+}
+
+// go test -v  -run=^$ -bench=Benchmark_Ctx_JSON -benchmem -count=4
+func Benchmark_Ctx_JSON(b *testing.B) {
+	app := New()
+	c := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(c)
 	type SomeStruct struct {
 		Name string
 		Age  uint8
 	}
-	app := New()
-	app.Get("/test", func(c *Ctx) {
-		if err := c.JSON(""); err != nil {
-			t.Fatalf(`%s: %s`, t.Name(), err)
-		}
-		data := SomeStruct{
-			Name: "Grame",
-			Age:  20,
-		}
-		if err := c.JSON(data); err != nil {
-			t.Fatalf(`%s: %s`, t.Name(), err)
-		}
-	})
-	req, _ := http.NewRequest("GET", "http://example.com/test", nil)
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf(`%s: %s`, t.Name(), err)
+	data := SomeStruct{
+		Name: "Grame",
+		Age:  20,
 	}
-	if resp.StatusCode != 200 {
-		t.Fatalf(`%s: StatusCode %v`, t.Name(), resp.StatusCode)
+	var err error
+	b.ReportAllocs()
+	b.ResetTimer()
+	for n := 0; n < b.N; n++ {
+		err = c.JSON(data)
 	}
-	if resp.Header.Get("Content-Type") != "application/json" {
-		t.Fatalf(`%s: Expecting %s`, t.Name(), "application/json")
-	}
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf(`%s: Error %s`, t.Name(), err)
-	}
-	if string(body) != `{"Name":"Grame","Age":20}` {
-		t.Fatalf(`%s: Expecting %s`, t.Name(), `{"Name":"Grame","Age":20}`)
-	}
+	utils.AssertEqual(b, nil, err)
+	utils.AssertEqual(b, `{"Name":"Grame","Age":20}`, string(c.Fasthttp.Response.Body()))
 }
-func Test_JSONP(t *testing.T) {
+
+// go test -run Test_Ctx_JSONP
+func Test_Ctx_JSONP(t *testing.T) {
+	t.Parallel()
+	app := New()
+	ctx := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(ctx)
+	ctx.JSONP(Map{ // map has no order
+		"Name": "Grame",
+		"Age":  20,
+	}, "john")
+	utils.AssertEqual(t, `john({"Age":20,"Name":"Grame"});`, string(ctx.Fasthttp.Response.Body()))
+	utils.AssertEqual(t, "application/javascript; charset=utf-8", string(ctx.Fasthttp.Response.Header.Peek("content-type")))
+}
+
+// go test -v  -run=^$ -bench=Benchmark_Ctx_JSONP -benchmem -count=4
+func Benchmark_Ctx_JSONP(b *testing.B) {
+	app := New()
+	c := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(c)
 	type SomeStruct struct {
 		Name string
 		Age  uint8
 	}
-	app := New()
-	app.Get("/test", func(c *Ctx) {
-		if err := c.JSONP(""); err != nil {
-			t.Fatalf(`%s: %s`, t.Name(), err)
-		}
-		data := SomeStruct{
-			Name: "Grame",
-			Age:  20,
-		}
-		if err := c.JSONP(data, "alwaysjohn"); err != nil {
-			t.Fatalf(`%s: %s`, t.Name(), err)
-		}
-	})
-	req, _ := http.NewRequest("GET", "http://example.com/test", nil)
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf(`%s: %s`, t.Name(), err)
+	data := SomeStruct{
+		Name: "Grame",
+		Age:  20,
 	}
-	if resp.StatusCode != 200 {
-		t.Fatalf(`%s: StatusCode %v`, t.Name(), resp.StatusCode)
+	var callback = "emit"
+	var err error
+	b.ReportAllocs()
+	b.ResetTimer()
+	for n := 0; n < b.N; n++ {
+		err = c.JSONP(data, callback)
 	}
-	if resp.Header.Get("Content-Type") != "application/javascript" {
-		t.Fatalf(`%s: Expecting %s`, t.Name(), "application/javascript")
-	}
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf(`%s: Error %s`, t.Name(), err)
-	}
-	if string(body) != `alwaysjohn({"Name":"Grame","Age":20});` {
-		t.Fatalf(`%s: Expecting %s`, t.Name(), `alwaysjohn({"Name":"Grame","Age":20});`)
-	}
+	utils.AssertEqual(b, nil, err)
+	utils.AssertEqual(b, `emit({"Name":"Grame","Age":20});`, string(c.Fasthttp.Response.Body()))
 }
-func Test_Links(t *testing.T) {
+
+// go test -run Test_Ctx_Links
+func Test_Ctx_Links(t *testing.T) {
+	t.Parallel()
 	app := New()
-	app.Get("/test", func(c *Ctx) {
+	ctx := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(ctx)
+	ctx.Links(
+		"http://api.example.com/users?page=2", "next",
+		"http://api.example.com/users?page=5", "last",
+	)
+	utils.AssertEqual(t, `<http://api.example.com/users?page=2>; rel="next",<http://api.example.com/users?page=5>; rel="last"`, string(ctx.Fasthttp.Response.Header.Peek(HeaderLink)))
+}
+
+// go test -v  -run=^$ -bench=Benchmark_Ctx_Links -benchmem -count=4
+func Benchmark_Ctx_Links(b *testing.B) {
+	app := New()
+	c := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(c)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for n := 0; n < b.N; n++ {
 		c.Links(
 			"http://api.example.com/users?page=2", "next",
 			"http://api.example.com/users?page=5", "last",
 		)
-	})
-	req, _ := http.NewRequest("GET", "http://example.com/test", nil)
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf(`%s: %s`, t.Name(), err)
-	}
-	if resp.StatusCode != 200 {
-		t.Fatalf(`%s: StatusCode %v`, t.Name(), resp.StatusCode)
-	}
-	if resp.Header.Get("Link") != `<http://api.example.com/users?page=2>; rel="next",<http://api.example.com/users?page=5>; rel="last"` {
-		t.Fatalf(`%s: Expecting %s`, t.Name(), `Link: <http://api.example.com/users?page=2>; rel="next",<http://api.example.com/users?page=5>; rel="last"`)
 	}
 }
-func Test_Location(t *testing.T) {
+
+// go test -run Test_Ctx_Location
+func Test_Ctx_Location(t *testing.T) {
+	t.Parallel()
 	app := New()
-	app.Get("/test", func(c *Ctx) {
-		c.Location("http://example.com")
-	})
-	req, _ := http.NewRequest("GET", "http://example.com/test", nil)
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf(`%s: %s`, t.Name(), err)
-	}
-	if resp.StatusCode != 200 {
-		t.Fatalf(`%s: StatusCode %v`, t.Name(), resp.StatusCode)
-	}
-	if resp.Header.Get("Location") != "http://example.com" {
-		t.Fatalf(`%s: Expecting %s`, t.Name(), "http://example.com")
-	}
+	ctx := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(ctx)
+	ctx.Location("http://example.com")
+	utils.AssertEqual(t, "http://example.com", string(ctx.Fasthttp.Response.Header.Peek(HeaderLocation)))
 }
-func Test_Next(t *testing.T) {
+
+// go test -run Test_Ctx_Next
+func Test_Ctx_Next(t *testing.T) {
 	app := New()
 	app.Use("/", func(c *Ctx) {
 		c.Next()
@@ -940,227 +1019,314 @@ func Test_Next(t *testing.T) {
 	app.Get("/test", func(c *Ctx) {
 		c.Set("X-Next-Result", "Works")
 	})
-	req, _ := http.NewRequest("GET", "http://example.com/test", nil)
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf(`%s: %s`, t.Name(), err)
-	}
-	if resp.StatusCode != 200 {
-		t.Fatalf(`%s: StatusCode %v`, t.Name(), resp.StatusCode)
-	}
-	if resp.Header.Get("X-Next-Result") != "Works" {
-		t.Fatalf(`%s: Expecting %s`, t.Name(), "X-Next-Results: Works")
-	}
+	resp, err := app.Test(httptest.NewRequest(MethodGet, "http://example.com/test", nil))
+	utils.AssertEqual(t, nil, err, "app.Test(req)")
+	utils.AssertEqual(t, StatusOK, resp.StatusCode, "Status code")
+	utils.AssertEqual(t, "Works", resp.Header.Get("X-Next-Result"))
 }
-func Test_Redirect(t *testing.T) {
+
+// go test -run Test_Ctx_Next_Error
+func Test_Ctx_Next_Error(t *testing.T) {
 	app := New()
-	app.Get("/test", func(c *Ctx) {
-		c.Redirect("http://example.com", 301)
+	app.Use("/", func(c *Ctx) {
+		c.Set("X-Next-Result", "Works")
+		c.Next(ErrNotFound)
 	})
-	req, _ := http.NewRequest("GET", "http://example.com/test", nil)
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf(`%s: %s`, t.Name(), err)
-	}
-	if resp.StatusCode != 301 {
-		t.Fatalf(`%s: StatusCode %v`, t.Name(), resp.StatusCode)
-	}
-	if resp.Header.Get("Location") != "http://example.com" {
-		t.Fatalf(`%s: Expecting %s`, t.Name(), "Location: http://example.com")
-	}
+
+	resp, err := app.Test(httptest.NewRequest(MethodGet, "http://example.com/test", nil))
+	utils.AssertEqual(t, nil, err, "app.Test(req)")
+	utils.AssertEqual(t, StatusNotFound, resp.StatusCode, "Status code")
+	utils.AssertEqual(t, "", resp.Header.Get("X-Next-Result"))
 }
-func Test_Render(t *testing.T) {
-	// TODO
-}
-func Test_Send(t *testing.T) {
+
+// go test -run Test_Ctx_Redirect
+func Test_Ctx_Redirect(t *testing.T) {
+	t.Parallel()
 	app := New()
-	app.Get("/test", func(c *Ctx) {
-		c.Send([]byte("Hello, World"))
-		c.Send("Don't crash please")
-		c.Send(1337)
+	ctx := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(ctx)
+	ctx.Redirect("http://example.com", 301)
+	utils.AssertEqual(t, 301, ctx.Fasthttp.Response.StatusCode())
+	utils.AssertEqual(t, "http://example.com", string(ctx.Fasthttp.Response.Header.Peek(HeaderLocation)))
+}
+
+// go test -run Test_Ctx_Render
+func Test_Ctx_Render(t *testing.T) {
+	t.Parallel()
+	app := New()
+	ctx := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(ctx)
+	err := ctx.Render("./.github/index.tmpl", Map{
+		"Title": "Hello, World!",
 	})
-	req, _ := http.NewRequest("GET", "http://example.com/test", nil)
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf(`%s: %s`, t.Name(), err)
-	}
-	if resp.StatusCode != 200 {
-		t.Fatalf(`%s: StatusCode %v`, t.Name(), resp.StatusCode)
-	}
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf(`%s: Error %s`, t.Name(), err)
-	}
-	if string(body) != `1337` {
-		t.Fatalf(`%s: Expecting %s`, t.Name(), `1337`)
-	}
+	utils.AssertEqual(t, nil, err)
+	utils.AssertEqual(t, "<h1>Hello, World!</h1>", string(ctx.Fasthttp.Response.Body()))
 }
-func Test_SendBytes(t *testing.T) {
+
+type testTemplateEngine struct {
+	templates *template.Template
+}
+
+func (t *testTemplateEngine) Render(w io.Writer, name string, bind interface{}) error {
+	return t.templates.ExecuteTemplate(w, name, bind)
+}
+
+// go test -run Test_Ctx_Render_Engine
+func Test_Ctx_Render_Engine(t *testing.T) {
+	t.Parallel()
+	engine := &testTemplateEngine{
+		templates: template.Must(template.ParseGlob("./.github/*.tmpl")),
+	}
 	app := New()
-	app.Get("/test", func(c *Ctx) {
-		c.SendBytes([]byte("Hello, World"))
+	app.Settings.Templates = engine
+	ctx := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(ctx)
+	err := ctx.Render("index.tmpl", Map{
+		"Title": "Hello, World!",
 	})
-	req, _ := http.NewRequest("GET", "http://example.com/test", nil)
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf(`%s: %s`, t.Name(), err)
-	}
-	if resp.StatusCode != 200 {
-		t.Fatalf(`%s: StatusCode %v`, t.Name(), resp.StatusCode)
-	}
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf(`%s: Error %s`, t.Name(), err)
-	}
-	if string(body) != `Hello, World` {
-		t.Fatalf(`%s: Expecting %s`, t.Name(), `Hello, World`)
-	}
+	utils.AssertEqual(t, nil, err)
+	utils.AssertEqual(t, "<h1>Hello, World!</h1>", string(ctx.Fasthttp.Response.Body()))
 }
-func Test_SendStatus(t *testing.T) {
+
+// go test -run Test_Ctx_Render_Go_Template
+func Test_Ctx_Render_Go_Template(t *testing.T) {
+	t.Parallel()
+	file, err := ioutil.TempFile(os.TempDir(), "fiber")
+	utils.AssertEqual(t, nil, err)
+	defer os.Remove(file.Name())
+	_, err = file.Write([]byte("template"))
+	utils.AssertEqual(t, nil, err)
+	err = file.Close()
+	utils.AssertEqual(t, nil, err)
 	app := New()
-	app.Get("/test", func(c *Ctx) {
-		c.SendStatus(415)
-	})
-	req, _ := http.NewRequest("GET", "http://example.com/test", nil)
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf(`%s: %s`, t.Name(), err)
-	}
-	if resp.StatusCode != 415 {
-		t.Fatalf(`%s: StatusCode %v`, t.Name(), resp.StatusCode)
-	}
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf(`%s: Error %s`, t.Name(), err)
-	}
-	if string(body) != `Unsupported Media Type` {
-		t.Fatalf(`%s: Expecting %s`, t.Name(), `Unsupported Media Type`)
-	}
+	ctx := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(ctx)
+	err = ctx.Render(file.Name(), nil)
+	utils.AssertEqual(t, nil, err)
+	utils.AssertEqual(t, "template", string(ctx.Fasthttp.Response.Body()))
 }
-func Test_SendString(t *testing.T) {
+
+// go test -run Test_Ctx_Send
+func Test_Ctx_Send(t *testing.T) {
+	t.Parallel()
 	app := New()
-	app.Get("/test", func(c *Ctx) {
-		c.SendString("Don't crash please")
-	})
-	req, _ := http.NewRequest("GET", "http://example.com/test", nil)
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf(`%s: %s`, t.Name(), err)
-	}
-	if resp.StatusCode != 200 {
-		t.Fatalf(`%s: StatusCode %v`, t.Name(), resp.StatusCode)
-	}
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf(`%s: Error %s`, t.Name(), err)
-	}
-	if string(body) != `Don't crash please` {
-		t.Fatalf(`%s: Expecting %s`, t.Name(), `Don't crash please`)
-	}
+	ctx := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(ctx)
+	ctx.Send([]byte("Hello, World"))
+	ctx.Send("Don't crash please")
+	ctx.Send(1337)
+	utils.AssertEqual(t, "1337", string(ctx.Fasthttp.Response.Body()))
 }
-func Test_Set(t *testing.T) {
+
+// go test -v  -run=^$ -bench=Benchmark_Ctx_Send -benchmem -count=4
+func Benchmark_Ctx_Send(b *testing.B) {
 	app := New()
-	app.Get("/test", func(c *Ctx) {
-		c.Set("X-1", "1")
-		c.Set("X-2", "2")
-		c.Set("X-3", "3")
-	})
-	req, _ := http.NewRequest("GET", "http://example.com/test", nil)
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf(`%s: %s`, t.Name(), err)
+	c := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(c)
+	var str = "Hello, World!"
+	var byt = []byte("Hello, World!")
+	var nmb = 123
+	var bol = true
+	b.ReportAllocs()
+	b.ResetTimer()
+	for n := 0; n < b.N; n++ {
+		c.Send(str)
+		c.Send(byt)
+		c.Send(nmb)
+		c.Send(bol)
 	}
-	if resp.StatusCode != 200 {
-		t.Fatalf(`%s: StatusCode %v`, t.Name(), resp.StatusCode)
-	}
-	if resp.Header.Get("X-1") != "1" {
-		t.Fatalf(`%s: Expected %v`, t.Name(), "X-1: 1")
-	}
-	if resp.Header.Get("X-2") != "2" {
-		t.Fatalf(`%s: Expected %v`, t.Name(), "X-2: 2")
-	}
-	if resp.Header.Get("X-3") != "3" {
-		t.Fatalf(`%s: Expected %v`, t.Name(), "X-3: 3")
-	}
+	utils.AssertEqual(b, "true", string(c.Fasthttp.Response.Body()))
 }
-func Test_Status(t *testing.T) {
+
+// go test -run Test_Ctx_SendBytes
+func Test_Ctx_SendBytes(t *testing.T) {
+	t.Parallel()
 	app := New()
-	app.Get("/test", func(c *Ctx) {
-		c.Status(400)
-		c.Status(415).Send("Hello, World")
-	})
-	req, _ := http.NewRequest("GET", "http://example.com/test", nil)
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf(`%s: %s`, t.Name(), err)
-	}
-	if resp.StatusCode != 415 {
-		t.Fatalf(`%s: StatusCode %v`, t.Name(), resp.StatusCode)
-	}
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf(`%s: Error %s`, t.Name(), err)
-	}
-	if string(body) != `Hello, World` {
-		t.Fatalf(`%s: Expecting %s`, t.Name(), `Hello, World`)
-	}
+	ctx := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(ctx)
+	ctx.SendBytes([]byte("Hello, World!"))
+	utils.AssertEqual(t, "Hello, World!", string(ctx.Fasthttp.Response.Body()))
 }
-func Test_Type(t *testing.T) {
+
+// go test -run Test_Ctx_SendStatus
+func Test_Ctx_SendStatus(t *testing.T) {
+	t.Parallel()
 	app := New()
-	app.Get("/test", func(c *Ctx) {
+	ctx := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(ctx)
+	ctx.SendStatus(415)
+	utils.AssertEqual(t, 415, ctx.Fasthttp.Response.StatusCode())
+	utils.AssertEqual(t, "Unsupported Media Type", string(ctx.Fasthttp.Response.Body()))
+}
+
+// go test -run Test_Ctx_SendString
+func Test_Ctx_SendString(t *testing.T) {
+	t.Parallel()
+	app := New()
+	ctx := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(ctx)
+	ctx.SendString("Don't crash please")
+	utils.AssertEqual(t, "Don't crash please", string(ctx.Fasthttp.Response.Body()))
+}
+
+// go test -run Test_Ctx_SendStream
+func Test_Ctx_SendStream(t *testing.T) {
+	t.Parallel()
+	app := New()
+	ctx := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(ctx)
+
+	ctx.SendStream(bytes.NewReader([]byte("Don't crash please")))
+	utils.AssertEqual(t, "Don't crash please", string(ctx.Fasthttp.Response.Body()))
+
+	ctx.SendStream(bytes.NewReader([]byte("Don't crash please")), len([]byte("Don't crash please")))
+	utils.AssertEqual(t, "Don't crash please", string(ctx.Fasthttp.Response.Body()))
+
+	ctx.SendStream(bufio.NewReader(bytes.NewReader([]byte("Hello bufio"))))
+	utils.AssertEqual(t, "Hello bufio", string(ctx.Fasthttp.Response.Body()))
+
+	file, err := os.Open("./.github/index.html")
+	utils.AssertEqual(t, nil, err)
+	ctx.SendStream(bufio.NewReader(file))
+	utils.AssertEqual(t, true, (ctx.Fasthttp.Response.Header.ContentLength() > 200))
+}
+
+// go test -run Test_Ctx_Set
+func Test_Ctx_Set(t *testing.T) {
+	t.Parallel()
+	app := New()
+	ctx := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(ctx)
+	ctx.Set("X-1", "1")
+	ctx.Set("X-2", "2")
+	ctx.Set("X-3", "3")
+	ctx.Set("X-3", "1337")
+	utils.AssertEqual(t, "1", string(ctx.Fasthttp.Response.Header.Peek("x-1")))
+	utils.AssertEqual(t, "2", string(ctx.Fasthttp.Response.Header.Peek("x-2")))
+	utils.AssertEqual(t, "1337", string(ctx.Fasthttp.Response.Header.Peek("x-3")))
+}
+
+// go test -run Test_Ctx_Status
+func Test_Ctx_Status(t *testing.T) {
+	t.Parallel()
+	app := New()
+	ctx := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(ctx)
+	ctx.Status(400)
+	utils.AssertEqual(t, 400, ctx.Fasthttp.Response.StatusCode())
+	ctx.Status(415).Send("Hello, World")
+	utils.AssertEqual(t, 415, ctx.Fasthttp.Response.StatusCode())
+	utils.AssertEqual(t, "Hello, World", string(ctx.Fasthttp.Response.Body()))
+}
+
+// go test -run Test_Ctx_Type
+func Test_Ctx_Type(t *testing.T) {
+	t.Parallel()
+	app := New()
+	ctx := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(ctx)
+	ctx.Type(".json")
+	utils.AssertEqual(t, "application/json", string(ctx.Fasthttp.Response.Header.Peek("Content-Type")))
+
+	ctx.Type("json", "utf-8")
+	utils.AssertEqual(t, "application/json; charset=utf-8", string(ctx.Fasthttp.Response.Header.Peek("Content-Type")))
+
+	ctx.Type(".html")
+	utils.AssertEqual(t, "text/html", string(ctx.Fasthttp.Response.Header.Peek("Content-Type")))
+
+	ctx.Type("html", "utf-8")
+	utils.AssertEqual(t, "text/html; charset=utf-8", string(ctx.Fasthttp.Response.Header.Peek("Content-Type")))
+}
+
+// go test -v  -run=^$ -bench=Benchmark_Ctx_Type -benchmem -count=4
+func Benchmark_Ctx_Type(b *testing.B) {
+	app := New()
+	c := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(c)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for n := 0; n < b.N; n++ {
 		c.Type(".json")
-	})
-	req, _ := http.NewRequest("GET", "http://example.com/test", nil)
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf(`%s: %s`, t.Name(), err)
-	}
-	if resp.StatusCode != 200 {
-		t.Fatalf(`%s: StatusCode %v`, t.Name(), resp.StatusCode)
-	}
-	if resp.Header.Get("Content-Type") != "application/json" {
-		t.Fatalf(`%s: Expected %v`, t.Name(), `Content-Type: application/json`)
+		c.Type("json")
 	}
 }
-func Test_Vary(t *testing.T) {
+
+// go test -v  -run=^$ -bench=Benchmark_Ctx_Type_Charset -benchmem -count=4
+func Benchmark_Ctx_Type_Charset(b *testing.B) {
 	app := New()
-	app.Get("/test", func(c *Ctx) {
-		c.Vary("Origin")
-		c.Vary("User-Agent")
-		c.Vary("Accept-Encoding", "Accept")
-	})
-	req, _ := http.NewRequest("GET", "http://example.com/test", nil)
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf(`%s: %s`, t.Name(), err)
-	}
-	if resp.StatusCode != 200 {
-		t.Fatalf(`%s: StatusCode %v`, t.Name(), resp.StatusCode)
-	}
-	if resp.Header.Get("Vary") != "Origin, User-Agent, Accept-Encoding, Accept" {
-		t.Fatalf(`%s: Expected %v`, t.Name(), `Vary: Origin, User-Agent, Accept-Encoding, Accept`)
+	c := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(c)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for n := 0; n < b.N; n++ {
+		c.Type(".json", "utf-8")
+		c.Type("json", "utf-8")
 	}
 }
-func Test_Write(t *testing.T) {
+
+// go test -run Test_Ctx_Vary
+func Test_Ctx_Vary(t *testing.T) {
+	t.Parallel()
 	app := New()
-	app.Get("/test", func(c *Ctx) {
-		c.Write("Hello, ")
-		c.Write([]byte("World! "))
-		c.Write(123)
-	})
-	req, _ := http.NewRequest("GET", "http://example.com/test", nil)
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf(`%s: %s`, t.Name(), err)
+	ctx := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(ctx)
+	ctx.Vary("Origin")
+	ctx.Vary("User-Agent")
+	ctx.Vary("Accept-Encoding", "Accept")
+	utils.AssertEqual(t, "Origin, User-Agent, Accept-Encoding, Accept", string(ctx.Fasthttp.Response.Header.Peek("Vary")))
+}
+
+// go test -v  -run=^$ -bench=Benchmark_Ctx_Vary -benchmem -count=4
+func Benchmark_Ctx_Vary(b *testing.B) {
+	app := New()
+	c := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(c)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for n := 0; n < b.N; n++ {
+		c.Vary("Origin", "User-Agent")
 	}
-	if resp.StatusCode != 200 {
-		t.Fatalf(`%s: StatusCode %v`, t.Name(), resp.StatusCode)
+}
+
+// go test -run Test_Ctx_Write
+func Test_Ctx_Write(t *testing.T) {
+	t.Parallel()
+	app := New()
+	ctx := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(ctx)
+	ctx.Write("Hello, ")
+	ctx.Write([]byte("World! "))
+	ctx.Write(123)
+	ctx.Write(true)
+	ctx.Write(bytes.NewReader([]byte("Don't crash please")))
+	utils.AssertEqual(t, "Don't crash please", string(ctx.Fasthttp.Response.Body()))
+}
+
+// go test -v -run=^$ -bench=Benchmark_Ctx_Write -benchmem -count=4
+func Benchmark_Ctx_Write(b *testing.B) {
+	app := New()
+	c := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(c)
+	var str = "Hello, World!"
+	var byt = []byte("Hello, World!")
+	var nmb = 123
+	var bol = true
+	b.ReportAllocs()
+	b.ResetTimer()
+	for n := 0; n < b.N; n++ {
+		c.Write(str)
+		c.Write(byt)
+		c.Write(nmb)
+		c.Write(bol)
 	}
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf(`%s: Error %s`, t.Name(), err)
-	}
-	if string(body) != `Hello, World! 123` {
-		t.Fatalf(`%s: Expecting %s`, t.Name(), `Hello, World! 123`)
-	}
+}
+
+// go test -run Test_Ctx_XHR
+func Test_Ctx_XHR(t *testing.T) {
+	t.Parallel()
+	app := New()
+	ctx := app.AcquireCtx(&fasthttp.RequestCtx{})
+	defer app.ReleaseCtx(ctx)
+	ctx.Fasthttp.Request.Header.Set(HeaderXRequestedWith, "XMLHttpRequest")
+	utils.AssertEqual(t, true, ctx.XHR())
 }
